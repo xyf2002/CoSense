@@ -44,6 +44,8 @@
 #include "newton-irPass-LLVMIR-memoryAlignment.h"
 #endif /* __cplusplus */
 
+
+#include <iostream> //added for count
 #include <algorithm>
 #include <cmath>
 #include <stdio.h>
