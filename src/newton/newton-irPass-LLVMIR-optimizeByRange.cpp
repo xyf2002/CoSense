@@ -447,6 +447,16 @@ irPassLLVMIROptimizeByRange(State * N)
     if (useOverLoad)
         overloadFunc(Mod, callerMap);
 
+
+
+// Print the LLVM IR
+    std::string ir_str;
+    llvm::raw_string_ostream OS(ir_str);
+    OS << *Mod;
+    OS.flush();
+    std::cout << "LLVM IR:\n" << ir_str;
+
+
 	/*
 	 * Dump BC file to a file.
 	 * */
