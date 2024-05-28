@@ -206,10 +206,6 @@ processNewtonFile(State *  N, char *  filename)
 	{
 		irPassLLVMIROptimizeByRange(N);
 	}
-    if (N->irPasses & kNewtonirPassLLVMIRAutoQuantization)
-    {
-        irPassLLVMIRAutoQuantization(N);
-    }
 	/*
 	 *	Dot backend.
 	 */
