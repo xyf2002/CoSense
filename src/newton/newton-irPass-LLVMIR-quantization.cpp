@@ -344,6 +344,9 @@ quantizePredict(CmpInst::Predicate predict)
 		case FCmpInst::FCMP_ONE:
 		case FCmpInst::FCMP_UNE:
 			return ICmpInst::ICMP_NE;
+			// TODO
+		default:
+			llvm_unreachable("Unknown predicate in quantizePredict");
 	}
 }
 
@@ -393,9 +396,19 @@ quantizeSimpleFPInstruction(Instruction * inInstruction, Type * quantizedType)
 			newInst	       = Builder.CreateSub(constZero, inInstruction->getOperand(0));
 			break;
 		}
+
+		// TODO add div
+		case Instruction::FDiv:
+		{
+			// Replace floating-point division with integer division
+			simplifyConstant(inInstruction, quantizedType);
+			break;
+		}
+
 		default:
 			break;
 	}
+
 	inInstruction->replaceAllUsesWith(newInst);
 	inInstruction->removeFromParent();
 }
@@ -412,10 +425,35 @@ adaptTypeCast(llvm::Function & llvmIrFunction, Type * quantizedType)
 			switch (llvmIrInstruction->getOpcode())
 			{
 				case Instruction::FPToUI:
+				{
+					// TODO Convert floating-point to unsigned integer
+					IRBuilder<> Builder(llvmIrInstruction);
+					Value *	    newInst = Builder.CreateFPToUI(llvmIrInstruction->getOperand(0), quantizedType);
+					llvmIrInstruction->replaceAllUsesWith(newInst);
+					llvmIrInstruction->removeFromParent();
+					break;
+				}
 				case Instruction::FPToSI:
+				{
+					// TODO  Convert floating-point to integer (unsigned/signed)
+					IRBuilder<> Builder(llvmIrInstruction);
+					Value *	    newInst = Builder.CreateFPToSI(llvmIrInstruction->getOperand(0), quantizedType);
+					llvmIrInstruction->replaceAllUsesWith(newInst);
+					llvmIrInstruction->removeFromParent();
+					break;
+				}
 				case Instruction::SIToFP:
+				{
+					// TODO Convert signed integer to floating-point
+					IRBuilder<> Builder(llvmIrInstruction);
+					Value *	    newInst = Builder.CreateSIToFP(llvmIrInstruction->getOperand(0), llvmIrInstruction->getType());
+					llvmIrInstruction->replaceAllUsesWith(newInst);
+					llvmIrInstruction->removeFromParent();
+					break;
+				}
 				case Instruction::UIToFP:
 				{
+					// Handle floating-point to integer and integer to floating-point conversions
 					auto sourceOp = llvmIrInstruction->getOperand(0);
 					if (sourceOp->getType() == llvmIrInstruction->getType())
 					{
@@ -431,8 +469,18 @@ adaptTypeCast(llvm::Function & llvmIrFunction, Type * quantizedType)
 					 * since the src type changed, adapt the new instruction
 					 * */
 				case Instruction::FPExt:
-				case Instruction::FPTrunc:
 				{
+					// TODO Extend floating-point precision
+					IRBuilder<> Builder(llvmIrInstruction);
+					Value *	    newInst = Builder.CreateFPExt(llvmIrInstruction->getOperand(0), llvmIrInstruction->getType());
+					llvmIrInstruction->replaceAllUsesWith(newInst);
+					llvmIrInstruction->removeFromParent();
+					break;
+				}
+				case Instruction::FPTrunc:
+
+				{
+					// Handle floating-point extensions and truncations
 					IRBuilder<>   Builder(llvmIrInstruction);
 					Instruction * insertPoint = llvmIrInstruction->getNextNode();
 					Builder.SetInsertPoint(insertPoint);
@@ -453,6 +501,7 @@ adaptTypeCast(llvm::Function & llvmIrFunction, Type * quantizedType)
 				}
 				case Instruction::BitCast:
 				{
+					// Handle bitcasts
 					IRBuilder<>   Builder(llvmIrInstruction);
 					Instruction * insertPoint = llvmIrInstruction->getNextNode();
 					Builder.SetInsertPoint(insertPoint);
@@ -462,6 +511,9 @@ adaptTypeCast(llvm::Function & llvmIrFunction, Type * quantizedType)
 					llvmIrInstruction->removeFromParent();
 					break;
 				}
+
+				default:
+					break;
 			}
 		}
 	}
