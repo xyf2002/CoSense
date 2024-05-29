@@ -320,7 +320,7 @@ substituteHardcodeFunc(Instruction * inInstruction, Type * quantizedType, llvm::
 	inInstruction->removeFromParent();
 }
 
-// Translate floating-point comparison predicates to integer equivalents
+// Quantize simple floating-point instructions
 CmpInst::Predicate
 quantizePredict(CmpInst::Predicate predict)
 {
@@ -328,51 +328,32 @@ quantizePredict(CmpInst::Predicate predict)
 	{
 		// Ordered comparisons
 		case FCmpInst::FCMP_OEQ:  // equal
-			return ICmpInst::ICMP_EQ;
-		case FCmpInst::FCMP_OGT:  // greater than
-			return ICmpInst::ICMP_SGT;
-		case FCmpInst::FCMP_OGE:  // greater than or equal
-			return ICmpInst::ICMP_SGE;
-		case FCmpInst::FCMP_OLT:  // less than
-			return ICmpInst::ICMP_SLT;
-		case FCmpInst::FCMP_OLE:  // less than or equal
-			return ICmpInst::ICMP_SLE;
-		case FCmpInst::FCMP_ONE:  // not equal
-			return ICmpInst::ICMP_NE;
-		case FCmpInst::FCMP_ORD:  // ordered (no NaNs)
-			// No direct integer equivalent, use not unordered
-			return ICmpInst::ICMP_ORD;
-
-		// Unordered comparisons
 		case FCmpInst::FCMP_UEQ:  // equal
 			return ICmpInst::ICMP_EQ;
+		case FCmpInst::FCMP_OGT:  // greater than
 		case FCmpInst::FCMP_UGT:  // greater than
 			return ICmpInst::ICMP_SGT;
+		case FCmpInst::FCMP_OGE:  // greater than or equal
 		case FCmpInst::FCMP_UGE:  // greater than or equal
 			return ICmpInst::ICMP_SGE;
+		case FCmpInst::FCMP_OLT:  // less than
 		case FCmpInst::FCMP_ULT:  // less than
 			return ICmpInst::ICMP_SLT;
+		case FCmpInst::FCMP_OLE:  // less than or equal
 		case FCmpInst::FCMP_ULE:  // less than or equal
 			return ICmpInst::ICMP_SLE;
+		case FCmpInst::FCMP_ONE:  // not equal
 		case FCmpInst::FCMP_UNE:  // not equal
 			return ICmpInst::ICMP_NE;
-		case FCmpInst::FCMP_UNO:  // unordered (at least one NaN)
-			// No direct integer equivalent, use unordered
-			return ICmpInst::ICMP_UNO;
 
-		// Always true/false comparisons
-		case FCmpInst::FCMP_TRUE:  // always true
-			// No direct integer equivalent, handle separately
-			return ICmpInst::BAD_ICMP_PREDICATE;
+		case FCmpInst::FCMP_ORD:    // ordered (no NaNs)
+		case FCmpInst::FCMP_UNO:    // unordered (at least one NaN)
+		case FCmpInst::FCMP_TRUE:   // always true
 		case FCmpInst::FCMP_FALSE:  // always false
-			// No direct integer equivalent, handle separately
-			return ICmpInst::BAD_ICMP_PREDICATE;
-
 		default:
-			llvm_unreachable("Unknown predicate in quantizePredict");
+			llvm_unreachable("Unknown or unsupported predicate in quantizePredict");
 	}
 }
-// Quantize simple floating-point instructions
 void
 quantizeSimpleFPInstruction(Instruction * inInstruction, Type * quantizedType)
 {
