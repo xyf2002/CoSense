@@ -30,6 +30,7 @@
 */
 
 #include "newton-irPass-LLVMIR-quantization.h"
+#include <cstddef>
 
 using namespace llvm;
 
@@ -565,7 +566,7 @@ irPassLLVMIRAutoQuantization(State * N, llvm::Function & llvmIrFunction, std::ve
 	/*
 	 * quantize the arguments type
 	 * */
-	for (int idx = 0; idx < llvmIrFunction.arg_size(); idx++)
+	for (size_t idx = 0; idx < llvmIrFunction.arg_size(); idx++)
 	{
 		auto paramOp = llvmIrFunction.getArg(idx);
 		setQuantizedType(paramOp, quantizedType);
