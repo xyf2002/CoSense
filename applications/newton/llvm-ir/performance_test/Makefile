@@ -52,11 +52,14 @@ endif
 
 max_opt_fn = opt ../$(1).ll $(OPT_FP_FLAG) -O3 -Os -S -o $(OUT_FILE)
 non_opt_fn = cp ../$(1).ll $(OUT_FILE)
-necessary_opt_fn = opt ../$(1).ll --simplifycfg --instsimplify -S -o $(OUT_FILE)
+necessary_opt_fn = opt ../$(2).ll --simplifycfg --instsimplify -S -o $(OUT_FILE)
 
 newton_opt_fn = ./newton-linux-EN --llvm-ir=../../applications/newton/llvm-ir/$(1).ll --llvm-ir-liveness-check ../../applications/newton/sensors/$(NT_FILE)
 
-compile_main_fn = $(CC) main.c $(TARGET_FLAG) -no-pie -L. -lout -D $(1) $(CC_OPT_LEVEL) -o main_out -lm
+#compile_main_fn = $(CC) main.c $(TARGET_FLAG) -no-pie -L. -lout -D $(1) $(CC_OPT_LEVEL) -o main_out -lm
+#TODO Updated compile_main_fn to accept an output file name as an argument
+compile_main_fn = $(CC) main.c $(TARGET_FLAG) -no-pie -L. -lout -D $(1) $(CC_OPT_LEVEL) -o $(2) -lm
+
 
 make_ll:
 	cd $(CHStone_DIR) && $(MAKE_CLEAN) && $(MAKE)
@@ -264,6 +267,8 @@ madgwick_opt:
 compile_test_madgwick:
 	$(CC) ../test_madgwick.c -D $(DATA_TYPE) $(CC_FP_FLAG) $(TARGET_FLAG) -no-pie -L. -lout $(CC_OPT_LEVEL) -o main_out -lm
 
+
+
 perf_exp: clean make_ll exp_non_opt compile_lib compile_exp
 
 perf_exp_opt: clean make_ll exp_opt compile_lib compile_exp
@@ -330,9 +335,14 @@ perf_benchmark_suite_quant: clean make_ll benchmark_suite_non_opt compile_lib co
 
 perf_benchmark_suite_fixedpoint: clean make_ll benchmark_suite_non_opt compile_lib compile_benchmark_suite_fixed_point
 
-perf_madgwick: clean make_ll madgwick_non_opt compile_lib compile_test_madgwick
+#perf_madgwick: clean make_ll madgwick_non_opt compile_lib compile_test_madgwick
 
-perf_madgwick_opt: clean make_ll madgwick_opt compile_lib compile_test_madgwick
+#TODO
+perf_madgwick: clean make_ll madgwick_non_opt compile_lib compile_test_madgwick_non_opt
+
+#perf_madgwick_opt: clean make_ll madgwick_opt compile_lib compile_test_madgwick
+#TODO
+perf_madgwick_opt: clean make_ll madgwick_opt compile_lib compile_test_madgwick_opt
 
 perf_func_call: clean make_ll func_call_opt compile_lib compile_func_call
 
@@ -342,6 +352,18 @@ perf_arm_sqrt_q15_opt: clean make_ll arm_sqrt_q15_opt compile_lib compile_arm_sq
 
 interface_lib: clean make_ll soft_float_api_opt compile_lib
 
+
+#TODO
+# New compile_test_madgwick_non_opt and compile_test_madgwick_opt targets
+compile_test_madgwick_non_opt:
+	$(call compile_main_fn,LIBC_MADGWICK,madgwick_non_opt.out)
+
+compile_test_madgwick_opt:
+	$(call compile_main_fn,LIBC_MADGWICK,madgwick_opt.out)
+
+
+
+
 auto_test_compile:
 	clang++ auto_test.cpp -g -o auto_test
 
@@ -350,6 +372,9 @@ all: default
 default: perf_exp perf_exp_opt perf_log perf_log_opt perf_acosh perf_acosh_opt perf_j0 perf_j0_opt perf_y0 perf_y0_opt perf_rem_pio2 perf_rem_pio2_opt perf_sincosf perf_sincosf_opt perf_float64_add perf_float64_add_opt perf_float64_div perf_float64_div_opt perf_float64_mul perf_float64_mul_opt perf_float64_sin perf_float64_sin_opt perf_arm_sqrt_q15 perf_arm_sqrt_q15_opt auto_test_compile
 
 clean:
-	$(QUIET)rm -f *.ll *.o *.s *.txt out.* libout.a main_out auto_test
+	#$(QUIET)rm -f *.ll *.o *.s *.txt out.* libout.a main_out auto_test
+	
+	#TODO
+	$(QUIET)rm -f *.ll *.o *.s *.txt out.* libout.a madgwick_non_opt.out madgwick_opt.out auto_tes
 	cd $(CHStone_DIR) && $(MAKE_CLEAN)
 	cd $(SUBDIR) && $(MAKE_CLEAN)
