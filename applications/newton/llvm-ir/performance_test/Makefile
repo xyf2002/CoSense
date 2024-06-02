@@ -58,7 +58,8 @@ newton_opt_fn = ./newton-linux-EN --llvm-ir=../../applications/newton/llvm-ir/$(
 
 #compile_main_fn = $(CC) main.c $(TARGET_FLAG) -no-pie -L. -lout -D $(1) $(CC_OPT_LEVEL) -o main_out -lm
 #TODO Updated compile_main_fn to accept an output file name as an argument
-compile_main_fn = $(CC) main.c $(TARGET_FLAG) -no-pie -L. -lout -D $(1) $(CC_OPT_LEVEL) -o $(2) -lm
+#compile_main_fn = $(CC) main.c $(TARGET_FLAG) -no-pie -L. -lout -D $(1) $(CC_OPT_LEVEL) -o $(2) -lm
+compile_main_fn = $(CC) ../test_madgwick.c $(TARGET_FLAG) -no-pie -L. -lout -D $(1) $(CC_OPT_LEVEL) -o $(2) -lm
 
 
 make_ll:
@@ -264,8 +265,7 @@ madgwick_opt:
 	llvm-dis ../MadgwickAHRSfix_output.bc
 	$(call max_opt_fn,MadgwickAHRSfix)
 
-compile_test_madgwick:
-	$(CC) ../test_madgwick.c -D $(DATA_TYPE) $(CC_FP_FLAG) $(TARGET_FLAG) -no-pie -L. -lout $(CC_OPT_LEVEL) -o main_out -lm
+
 
 
 
@@ -354,13 +354,17 @@ interface_lib: clean make_ll soft_float_api_opt compile_lib
 
 
 #TODO
-# New compile_test_madgwick_non_opt and compile_test_madgwick_opt targets
+#Original Code
+compile_test_madgwick:
+	$(CC) ../test_madgwick.c -D $(DATA_TYPE) $(CC_FP_FLAG) $(TARGET_FLAG) -no-pie -L. -lout $(CC_OPT_LEVEL) -o main_out -lm
+
+
+# New compile_test_madgwick_non_opt and compile_test_madg/wick_opt targets
 compile_test_madgwick_non_opt:
-	$(call compile_main_fn,LIBC_MADGWICK,madgwick_non_opt.out)
+	$(CC) ../test_madgwick.c -D LIBC_MADGWICK -D INT_DATA_TYPE $(CC_FP_FLAG) $(TARGET_FLAG) -no-pie -L. -lout $(CC_OPT_LEVEL) -o madgwick_non_opt.out -lm
 
 compile_test_madgwick_opt:
-	$(call compile_main_fn,LIBC_MADGWICK,madgwick_opt.out)
-
+	$(CC) ../test_madgwick.c -D LIBC_MADGWICK -D FP_DATA_TYPE $(CC_FP_FLAG) $(TARGET_FLAG) -no-pie -L. -lout $(CC_OPT_LEVEL) -o madgwick_opt.out -lm
 
 
 
@@ -375,6 +379,11 @@ clean:
 	#$(QUIET)rm -f *.ll *.o *.s *.txt out.* libout.a main_out auto_test
 	
 	#TODO
-	$(QUIET)rm -f *.ll *.o *.s *.txt out.* libout.a madgwick_non_opt.out madgwick_opt.out auto_tes
+	$(QUIET)rm -f *.ll *.o *.s *.txt out.* libout.a main_out auto_test
 	cd $(CHStone_DIR) && $(MAKE_CLEAN)
 	cd $(SUBDIR) && $(MAKE_CLEAN)
+	# Do not delete madgwick_opt.out and madgwick_non_opt.out
+	$(QUIET)echo "Skipping deletion of madgwick_opt.out and madgwick_non_opt.out"
+
+full_clean: clean
+	$(QUIET)rm -f madgwick_opt.out madgwick_non_opt.out
