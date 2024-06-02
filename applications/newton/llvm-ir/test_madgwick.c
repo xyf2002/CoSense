@@ -229,6 +229,15 @@ main()
 
 	fclose(fp);
 
+	// TODO Initialize quaternion values
+	//
+	//
+	extern volatile float q0, q1, q2, q3;
+	q0 = 0.64306622f;
+	q1 = 0.02828862f;
+	q2 = -0.00567953f;
+	q3 = -0.76526684f;
+
 	for (size_t idx = 0; idx < ITERATION; idx++)
 	{
 		timespec timer = tic();
@@ -241,9 +250,11 @@ main()
 		toc(&timer, "computation delay");
 	}
 
+	// TODO
+	// rename("intermediate_results.txt", "intermediate_results_non_opt.txt");
+
 	// Validate the algorithm
-	// extern volatile float q0, q1, q2, q3;
-	// printf("Final quaternion values: q0 = %f, q1 = %f, q2 = %f, q3 = %f\n", q0, q1, q2, q3);
+	printf("Final quaternion values: q0 = %f, q1 = %f, q2 = %f, q3 = %f\n", q0, q1, q2, q3);
 
 	return 0;
 }
