@@ -40,7 +40,7 @@ struct timerData {
     std::vector<double> compile_time;
 };
 
-#define TLOG_TIMESPEC_NSEC_PER_SEC  10000000
+#define TLOG_TIMESPEC_NSEC_PER_SEC  1000000
 
 typedef struct timespec timespec;
 
@@ -48,7 +48,7 @@ timespec diff(timespec start, timespec end) {
 	timespec temp;
 	if ((end.tv_nsec - start.tv_nsec) < 0) {
 		temp.tv_sec = end.tv_sec - start.tv_sec - 1;
-		temp.tv_nsec = 1000000000 + end.tv_nsec - start.tv_nsec;
+		temp.tv_nsec = 100000000 + end.tv_nsec - start.tv_nsec;
 	} else {
 		temp.tv_sec = end.tv_sec - start.tv_sec;
 		temp.tv_nsec = end.tv_nsec - start.tv_nsec;
@@ -163,7 +163,7 @@ std::pair<int64_t, int64_t> processDataPerf(const std::string test_case, const s
     cmd = "bash -c 'perf stat -B ./main_out " + params;
 
 //    cmd += "if=/dev/zero of=/dev/null count=1000000";
-    cmd += "if=/dev/zero of=/dev/null count=10000000";
+    cmd += "if=/dev/zero of=/dev/null count=1000000";
     cmd += " 2>&1 | tee tmp.log'";
     command_return = system(cmd.c_str());
     if (command_return != 0) {
