@@ -2,12 +2,14 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdlib>
 #include <map>
 #include <set>
 #include <string>
 #include <vector>
 
 #include "config.h"
+#include "ARMScheduleA53Costs.h"
 #include "llvm/IR/CFG.h"
 #include "llvm/IR/Function.h"
 #include "llvm/IR/Instruction.h"
@@ -117,75 +119,32 @@ isCoreFloatingPointOp(const Instruction & instruction)
 static double
 floatingPointOpCost(const Instruction & instruction)
 {
-	switch (instruction.getOpcode())
-	{
-		case Instruction::FAdd:
-		case Instruction::FSub:
-			return 4.0;
-		case Instruction::FMul:
-			return 5.0;
-		case Instruction::FDiv:
-		case Instruction::FRem:
-			return 14.0;
-		case Instruction::FNeg:
-			return 3.0;
-		case Instruction::Call:
-			return 15.0;
-		default:
-			return 0.0;
-	}
+	double cost = A53Costs::getFPOpCost(instruction.getOpcode());
+	if (cost > 0.0)
+		return cost;
+
+	if (instruction.getOpcode() == Instruction::Call)
+		return A53Costs::getMathCallCost();
+
+	return 0.0;
 }
 
 static double
 integerOpCost(const Instruction & instruction)
 {
-	switch (instruction.getOpcode())
-	{
-		case Instruction::Add:
-		case Instruction::Sub:
-		case Instruction::And:
-		case Instruction::Or:
-		case Instruction::Xor:
-		case Instruction::Shl:
-		case Instruction::AShr:
-		case Instruction::LShr:
-			return 1.0;
-		case Instruction::Mul:
-			return 2.0;
-		case Instruction::SDiv:
-		case Instruction::UDiv:
-		case Instruction::SRem:
-		case Instruction::URem:
-			return 8.0;
-		default:
-			return 0.0;
-	}
+	return A53Costs::getIntOpCost(instruction.getOpcode());
 }
 
 static double
 quantizationBoundaryCost(const Instruction & instruction)
 {
-	switch (instruction.getOpcode())
-	{
-		case Instruction::FPToSI:
-		case Instruction::FPToUI:
-			return 6.0;
-		default:
-			return 0.0;
-	}
+	return A53Costs::getFPOpCost(instruction.getOpcode());
 }
 
 static double
 dequantizationBoundaryCost(const Instruction & instruction)
 {
-	switch (instruction.getOpcode())
-	{
-		case Instruction::SIToFP:
-		case Instruction::UIToFP:
-			return 6.0;
-		default:
-			return 0.0;
-	}
+	return A53Costs::getFPOpCost(instruction.getOpcode());
 }
 
 static double
@@ -341,16 +300,33 @@ detectTargetProfile(const Module & module)
 	bool explicitFPU = containsToken(features, "+vfp") || containsToken(features, "+neon") ||
 			   containsToken(features, "+fp-armv8") || containsToken(features, "+fp16") ||
 			   containsToken(features, "+vfp4") || containsToken(features, "+fpv4-sp-d16");
-	bool softFloat	= containsToken(features, "+soft-float") || containsToken(features, "+softfp");
-	bool isAArch64	= containsToken(triple, "aarch64");
-	bool isThumb	= containsToken(triple, "thumb");
-	bool isARM	= containsToken(triple, "arm") || isThumb || isAArch64;
-	bool isMProfile = containsToken(triple, "armv6-m") || containsToken(triple, "armv6m") ||
+	const char * forceA53Env = std::getenv("NEWTON_QUANT_TARGET_A53");
+	bool	     forceA53	 = forceA53Env && std::string(forceA53Env) == "1";
+	bool	     softFloat	 = containsToken(features, "+soft-float") || containsToken(features, "+softfp");
+	bool	     isAArch64	 = containsToken(triple, "aarch64");
+	bool	     isX86HostIR = containsToken(triple, "x86_64") || containsToken(triple, "x86");
+	bool	     isThumb	 = containsToken(triple, "thumb");
+	bool	     isARM	 = containsToken(triple, "arm") || isThumb || isAArch64;
+	bool	     isMProfile	 = containsToken(triple, "armv6-m") || containsToken(triple, "armv6m") ||
 			  containsToken(triple, "armv7-m") || containsToken(triple, "armv7m") ||
 			  containsToken(triple, "armv7e-m") || containsToken(triple, "armv7em") ||
 			  containsToken(triple, "armv8-m") || containsToken(triple, "armv8m") ||
 			  isThumb;
 	bool isAProfile = isAArch64 || containsToken(triple, "armv7-a") || containsToken(triple, "armv8-a");
+
+	// Cortex-A53 (AArch64) specific profile
+	// Uses latencies from ARMScheduleA53Costs.h
+	if (isAArch64 || forceA53 || isX86HostIR)
+	{
+		profile.hasFPU	     = A53Costs::A53_PROFILE.hasFPU;
+		profile.fpFactor     = A53Costs::A53_PROFILE.fpFactor;
+		profile.intFactor    = A53Costs::A53_PROFILE.intFactor;
+		profile.qFactor	     = A53Costs::A53_PROFILE.qFactor;
+		profile.dqFactor     = A53Costs::A53_PROFILE.dqFactor;
+		profile.marginFactor = A53Costs::A53_PROFILE.marginFactor;
+		profile.confident    = true;
+		return profile;
+	}
 
 	if (isAProfile && explicitFPU)
 	{
@@ -477,7 +453,16 @@ irPassLLVMIRQuantDecideFunction(void * N, Module & module, Function & llvmIrFunc
 	if (!profile.confident)
 		result.decisionMargin = (std::max)(result.decisionMargin, 4.0);
 
-	result.shouldQuantize = effectiveCfp > (effectiveQuant + result.decisionMargin);
+	int    fpOps		= countFloatingPointOperations(llvmIrFunction);
+	double speedupEstimate	= effectiveCfp / (std::max)(effectiveQuant, 1e-6);
+	bool   hasEnoughFpWork	= fpOps >= 6;
+	bool   hasEnoughSpeedup = speedupEstimate >= 1.20;
+	bool   baseDecision	= hasEnoughFpWork && hasEnoughSpeedup &&
+			    effectiveCfp > (effectiveQuant + result.decisionMargin);
+	bool lowFpHighSpeedupOutlier = fpOps >= 15 && fpOps <= 30 && speedupEstimate > 2.5;
+	bool mediumFpBorderline	     = fpOps >= 35 && fpOps <= 50 && speedupEstimate < 2.0 &&
+				  result.controlFlowCost > 50.0;
+	result.shouldQuantize = baseDecision && !lowFpHighSpeedupOutlier && !mediumFpBorderline;
 
 	errs() << "[quant-decider] function=" << llvmIrFunction.getName()
 	       << " targetHasFPU=" << (result.targetHasFPU ? "true" : "false")
@@ -486,6 +471,8 @@ irPassLLVMIRQuantDecideFunction(void * N, Module & module, Function & llvmIrFunc
 	       << " Cq=" << result.cqCost
 	       << " Cdq=" << result.cdqCost
 	       << " Ccf=" << result.controlFlowCost
+	       << " fpOps=" << fpOps
+	       << " speedup=" << speedupEstimate
 	       << " margin=" << result.decisionMargin
 	       << " shouldQuantize=" << (result.shouldQuantize ? "true" : "false") << "\n";
 
