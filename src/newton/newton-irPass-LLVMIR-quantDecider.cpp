@@ -1,15 +1,17 @@
 #include "newton-irPass-LLVMIR-quantDecider.h"
 
 #include <algorithm>
+#include <cctype>
 #include <cmath>
 #include <cstdlib>
+#include <fstream>
 #include <map>
+#include <sstream>
 #include <set>
 #include <string>
 #include <vector>
 
 #include "config.h"
-#include "ARMScheduleA53Costs.h"
 #include "llvm/IR/CFG.h"
 #include "llvm/IR/Function.h"
 #include "llvm/IR/Instruction.h"
@@ -42,6 +44,264 @@ struct TargetProfile {
 	double marginFactor;
 	bool   confident;
 };
+
+struct ScheduleModel {
+	TargetProfile		   profile;
+	std::map<unsigned, double> opcodeCost;
+	double			   mathCallCost;
+	double			   unknownFpCost;
+	bool			   loaded;
+};
+
+static ScheduleModel gScheduleModel = {{false, 1.0, 1.0, 1.0, 1.0, 0.05, false}, {}, 20.0, 1.0, false};
+
+static std::string collectTargetFeatures(const Module & module);
+static bool	   containsToken(const std::string & haystack, const std::string & token);
+
+static std::string
+trim(const std::string & input)
+{
+	const std::string whitespace = " \t\r\n";
+	const auto	  begin	     = input.find_first_not_of(whitespace);
+	if (begin == std::string::npos)
+		return "";
+	const auto end = input.find_last_not_of(whitespace);
+	return input.substr(begin, end - begin + 1);
+}
+
+static bool
+startsWith(const std::string & text, const std::string & prefix)
+{
+	return text.rfind(prefix, 0) == 0;
+}
+
+static std::string
+stripQuotes(const std::string & value)
+{
+	std::string trimmed = trim(value);
+	if (trimmed.size() >= 2 &&
+	    ((trimmed.front() == '"' && trimmed.back() == '"') ||
+	     (trimmed.front() == '\'' && trimmed.back() == '\'')))
+	{
+		return trimmed.substr(1, trimmed.size() - 2);
+	}
+	return trimmed;
+}
+
+static bool
+parseBool(const std::string & value)
+{
+	std::string lowered = stripQuotes(value);
+	std::transform(lowered.begin(), lowered.end(), lowered.begin(), ::tolower);
+	return lowered == "true" || lowered == "1" || lowered == "yes";
+}
+
+static double
+parseDouble(const std::string & value, double fallbackValue)
+{
+	std::stringstream stream(stripQuotes(value));
+	double		  parsed = fallbackValue;
+	stream >> parsed;
+	return stream.fail() ? fallbackValue : parsed;
+}
+
+static unsigned
+opcodeFromToken(const std::string & token)
+{
+	if (token == "FAdd")
+		return Instruction::FAdd;
+	if (token == "FSub")
+		return Instruction::FSub;
+	if (token == "FMul")
+		return Instruction::FMul;
+	if (token == "FDiv")
+		return Instruction::FDiv;
+	if (token == "FRem")
+		return Instruction::FRem;
+	if (token == "FNeg")
+		return Instruction::FNeg;
+	if (token == "FPToSI")
+		return Instruction::FPToSI;
+	if (token == "FPToUI")
+		return Instruction::FPToUI;
+	if (token == "SIToFP")
+		return Instruction::SIToFP;
+	if (token == "UIToFP")
+		return Instruction::UIToFP;
+	if (token == "Add")
+		return Instruction::Add;
+	if (token == "Sub")
+		return Instruction::Sub;
+	if (token == "And")
+		return Instruction::And;
+	if (token == "Or")
+		return Instruction::Or;
+	if (token == "Xor")
+		return Instruction::Xor;
+	if (token == "Shl")
+		return Instruction::Shl;
+	if (token == "AShr")
+		return Instruction::AShr;
+	if (token == "LShr")
+		return Instruction::LShr;
+	if (token == "Mul")
+		return Instruction::Mul;
+	if (token == "SDiv")
+		return Instruction::SDiv;
+	if (token == "UDiv")
+		return Instruction::UDiv;
+	if (token == "SRem")
+		return Instruction::SRem;
+	if (token == "URem")
+		return Instruction::URem;
+	return 0;
+}
+
+static std::string
+resolveProfileKey(const Module & module)
+{
+	const char * envProfile = std::getenv("NEWTON_QUANT_PROFILE");
+	if (envProfile && std::string(envProfile).size() > 0)
+		return std::string(envProfile);
+
+	std::string triple	= module.getTargetTriple();
+	std::string features	= collectTargetFeatures(module);
+	bool	    explicitFPU = containsToken(features, "+vfp") || containsToken(features, "+neon") ||
+			   containsToken(features, "+fp-armv8") || containsToken(features, "+fp16") ||
+			   containsToken(features, "+vfp4") || containsToken(features, "+fpv4-sp-d16");
+	bool softFloat	= containsToken(features, "+soft-float") || containsToken(features, "+softfp");
+	bool isAArch64	= containsToken(triple, "aarch64");
+	bool isThumb	= containsToken(triple, "thumb");
+	bool isMProfile = containsToken(triple, "armv6-m") || containsToken(triple, "armv6m") ||
+			  containsToken(triple, "armv7-m") || containsToken(triple, "armv7m") ||
+			  containsToken(triple, "armv7e-m") || containsToken(triple, "armv7em") ||
+			  containsToken(triple, "armv8-m") || containsToken(triple, "armv8m") ||
+			  isThumb;
+
+	if (isAArch64)
+		return "arm-a-profile";
+	if (isMProfile && (!explicitFPU || softFloat))
+		return "arm-m-profile-soft";
+	if (isMProfile && explicitFPU)
+		return "arm-m-profile-fpu";
+	if (containsToken(triple, "x86_64") || containsToken(triple, "x86"))
+		return "analysis-default";
+	return "generic-default";
+}
+
+static bool
+loadScheduleModelFromFile(const std::string & profileKey, const std::string & filePath,
+			  ScheduleModel & model)
+{
+	std::ifstream input(filePath);
+	if (!input.is_open())
+		return false;
+
+	std::string line;
+	bool	    insideTargetBlock = false;
+	while (std::getline(input, line))
+	{
+		std::string content = trim(line);
+		if (content.empty() || startsWith(content, "//") || startsWith(content, "#"))
+			continue;
+
+		if (startsWith(content, "def NewtonScheduleModel<"))
+		{
+			size_t quoteStart = content.find('"');
+			size_t quoteEnd	  = content.find('"', quoteStart + 1);
+			if (quoteStart != std::string::npos && quoteEnd != std::string::npos)
+			{
+				std::string modelKey = content.substr(quoteStart + 1, quoteEnd - quoteStart - 1);
+				insideTargetBlock    = (modelKey == profileKey);
+			}
+			continue;
+		}
+
+		if (!insideTargetBlock)
+			continue;
+
+		if (content == "}")
+			break;
+
+		if (startsWith(content, "let "))
+		{
+			size_t eqPos	    = content.find('=');
+			size_t semicolonPos = content.rfind(';');
+			if (eqPos == std::string::npos || semicolonPos == std::string::npos || semicolonPos <= eqPos)
+				continue;
+
+			std::string key	  = trim(content.substr(4, eqPos - 4));
+			std::string value = trim(content.substr(eqPos + 1, semicolonPos - eqPos - 1));
+			if (key == "HasFPU")
+				model.profile.hasFPU = parseBool(value);
+			else if (key == "FpFactor")
+				model.profile.fpFactor = parseDouble(value, model.profile.fpFactor);
+			else if (key == "IntFactor")
+				model.profile.intFactor = parseDouble(value, model.profile.intFactor);
+			else if (key == "QFactor")
+				model.profile.qFactor = parseDouble(value, model.profile.qFactor);
+			else if (key == "DQFactor")
+				model.profile.dqFactor = parseDouble(value, model.profile.dqFactor);
+			else if (key == "MarginFactor")
+				model.profile.marginFactor = parseDouble(value, model.profile.marginFactor);
+			else if (key == "Confident")
+				model.profile.confident = parseBool(value);
+			else if (key == "MathCallCost")
+				model.mathCallCost = parseDouble(value, model.mathCallCost);
+			else if (key == "UnknownFpCost")
+				model.unknownFpCost = parseDouble(value, model.unknownFpCost);
+			continue;
+		}
+
+		if (startsWith(content, "def COST_"))
+		{
+			size_t lt    = content.find('<');
+			size_t comma = content.find(',');
+			size_t gt    = content.find('>');
+			if (lt == std::string::npos || comma == std::string::npos || gt == std::string::npos || comma <= lt)
+				continue;
+
+			std::string opToken = stripQuotes(content.substr(lt + 1, comma - lt - 1));
+			double	    cost    = parseDouble(content.substr(comma + 1, gt - comma - 1), 0.0);
+			unsigned    opcode  = opcodeFromToken(opToken);
+			if (opcode != 0)
+				model.opcodeCost[opcode] = cost;
+		}
+	}
+
+	model.loaded = !model.opcodeCost.empty();
+	return model.loaded;
+}
+
+static ScheduleModel
+resolveScheduleModel(const Module & module)
+{
+	ScheduleModel model	 = {{false, 1.0, 1.0, 1.0, 1.0, 0.05, false}, {}, 20.0, 1.0, false};
+	std::string   profileKey = resolveProfileKey(module);
+
+	std::vector<std::string> candidateFiles;
+	const char *		 envScheduleFile = std::getenv("NEWTON_QUANT_SCHEDULE_FILE");
+	if (envScheduleFile && std::string(envScheduleFile).size() > 0)
+		candidateFiles.push_back(std::string(envScheduleFile));
+	candidateFiles.push_back("Schedule/DefaultSchedule.td");
+	candidateFiles.push_back("./Schedule/DefaultSchedule.td");
+	candidateFiles.push_back("src/newton/Schedule/DefaultSchedule.td");
+	candidateFiles.push_back("ScheduleProfiles.td");
+	candidateFiles.push_back("./ScheduleProfiles.td");
+	candidateFiles.push_back("src/newton/ScheduleProfiles.td");
+
+	for (const std::string & filePath : candidateFiles)
+	{
+		if (loadScheduleModelFromFile(profileKey, filePath, model))
+			return model;
+	}
+
+	model.profile	    = {false, 1.4, 1.0, 1.2, 1.2, 0.06, false};
+	model.unknownFpCost = 1.0;
+	model.mathCallCost  = 20.0;
+	model.loaded	    = false;
+	return model;
+}
 
 static bool
 isMathRuntimeCall(const CallBase & callBase)
@@ -119,12 +379,16 @@ isCoreFloatingPointOp(const Instruction & instruction)
 static double
 floatingPointOpCost(const Instruction & instruction)
 {
-	double cost = A53Costs::getFPOpCost(instruction.getOpcode());
+	if (!isCoreFloatingPointOp(instruction) && instruction.getOpcode() != Instruction::Call)
+		return 0.0;
+
+	auto   costIt = gScheduleModel.opcodeCost.find(instruction.getOpcode());
+	double cost   = (costIt != gScheduleModel.opcodeCost.end()) ? costIt->second : 0.0;
 	if (cost > 0.0)
 		return cost;
 
 	if (instruction.getOpcode() == Instruction::Call)
-		return A53Costs::getMathCallCost();
+		return gScheduleModel.mathCallCost;
 
 	return 0.0;
 }
@@ -132,19 +396,50 @@ floatingPointOpCost(const Instruction & instruction)
 static double
 integerOpCost(const Instruction & instruction)
 {
-	return A53Costs::getIntOpCost(instruction.getOpcode());
+	switch (instruction.getOpcode())
+	{
+		case Instruction::Add:
+		case Instruction::Sub:
+		case Instruction::And:
+		case Instruction::Or:
+		case Instruction::Xor:
+		case Instruction::Shl:
+		case Instruction::AShr:
+		case Instruction::LShr:
+		case Instruction::Mul:
+		case Instruction::SDiv:
+		case Instruction::UDiv:
+		case Instruction::SRem:
+		case Instruction::URem:
+			break;
+		default:
+			return 0.0;
+	}
+
+	auto costIt = gScheduleModel.opcodeCost.find(instruction.getOpcode());
+	return (costIt != gScheduleModel.opcodeCost.end()) ? costIt->second : 0.0;
 }
 
 static double
 quantizationBoundaryCost(const Instruction & instruction)
 {
-	return A53Costs::getFPOpCost(instruction.getOpcode());
+	if (instruction.getOpcode() != Instruction::FPToSI &&
+	    instruction.getOpcode() != Instruction::FPToUI)
+		return 0.0;
+
+	auto costIt = gScheduleModel.opcodeCost.find(instruction.getOpcode());
+	return (costIt != gScheduleModel.opcodeCost.end()) ? costIt->second : 0.0;
 }
 
 static double
 dequantizationBoundaryCost(const Instruction & instruction)
 {
-	return A53Costs::getFPOpCost(instruction.getOpcode());
+	if (instruction.getOpcode() != Instruction::SIToFP &&
+	    instruction.getOpcode() != Instruction::UIToFP)
+		return 0.0;
+
+	auto costIt = gScheduleModel.opcodeCost.find(instruction.getOpcode());
+	return (costIt != gScheduleModel.opcodeCost.end()) ? costIt->second : 0.0;
 }
 
 static double
@@ -225,7 +520,7 @@ estimateCostBreakdown(const Function & function)
 			}
 			else if (usesOrProducesFloatingPoint(instruction))
 			{
-				blockCfp += 1.0;
+				blockCfp += gScheduleModel.unknownFpCost;
 				breakdown.fpClusterInstructionCount++;
 			}
 
@@ -292,86 +587,8 @@ containsToken(const std::string & haystack, const std::string & token)
 static TargetProfile
 detectTargetProfile(const Module & module)
 {
-	TargetProfile profile = {false, 1.0, 1.0, 1.0, 1.0, 0.05, false};
-
-	std::string triple   = module.getTargetTriple();
-	std::string features = collectTargetFeatures(module);
-
-	bool explicitFPU = containsToken(features, "+vfp") || containsToken(features, "+neon") ||
-			   containsToken(features, "+fp-armv8") || containsToken(features, "+fp16") ||
-			   containsToken(features, "+vfp4") || containsToken(features, "+fpv4-sp-d16");
-	const char * forceA53Env = std::getenv("NEWTON_QUANT_TARGET_A53");
-	bool	     forceA53	 = forceA53Env && std::string(forceA53Env) == "1";
-	bool	     softFloat	 = containsToken(features, "+soft-float") || containsToken(features, "+softfp");
-	bool	     isAArch64	 = containsToken(triple, "aarch64");
-	bool	     isX86HostIR = containsToken(triple, "x86_64") || containsToken(triple, "x86");
-	bool	     isThumb	 = containsToken(triple, "thumb");
-	bool	     isARM	 = containsToken(triple, "arm") || isThumb || isAArch64;
-	bool	     isMProfile	 = containsToken(triple, "armv6-m") || containsToken(triple, "armv6m") ||
-			  containsToken(triple, "armv7-m") || containsToken(triple, "armv7m") ||
-			  containsToken(triple, "armv7e-m") || containsToken(triple, "armv7em") ||
-			  containsToken(triple, "armv8-m") || containsToken(triple, "armv8m") ||
-			  isThumb;
-	bool isAProfile = isAArch64 || containsToken(triple, "armv7-a") || containsToken(triple, "armv8-a");
-
-	// Cortex-A53 (AArch64) specific profile
-	// Uses latencies from ARMScheduleA53Costs.h
-	if (isAArch64 || forceA53 || isX86HostIR)
-	{
-		profile.hasFPU	     = A53Costs::A53_PROFILE.hasFPU;
-		profile.fpFactor     = A53Costs::A53_PROFILE.fpFactor;
-		profile.intFactor    = A53Costs::A53_PROFILE.intFactor;
-		profile.qFactor	     = A53Costs::A53_PROFILE.qFactor;
-		profile.dqFactor     = A53Costs::A53_PROFILE.dqFactor;
-		profile.marginFactor = A53Costs::A53_PROFILE.marginFactor;
-		profile.confident    = true;
-		return profile;
-	}
-
-	if (isAProfile && explicitFPU)
-	{
-		profile.hasFPU	     = true;
-		profile.fpFactor     = 0.85;
-		profile.intFactor    = 1.00;
-		profile.qFactor	     = 1.15;
-		profile.dqFactor     = 1.15;
-		profile.marginFactor = 0.10;
-		profile.confident    = true;
-		return profile;
-	}
-
-	if (isMProfile && (!explicitFPU || softFloat))
-	{
-		profile.hasFPU	     = false;
-		profile.fpFactor     = 2.30;
-		profile.intFactor    = 0.95;
-		profile.qFactor	     = 1.25;
-		profile.dqFactor     = 1.30;
-		profile.marginFactor = 0.02;
-		profile.confident    = true;
-		return profile;
-	}
-
-	if (isMProfile && explicitFPU)
-	{
-		profile.hasFPU	     = explicitFPU;
-		profile.fpFactor     = explicitFPU ? 1.05 : 1.80;
-		profile.intFactor    = 0.95;
-		profile.qFactor	     = explicitFPU ? 1.10 : 1.20;
-		profile.dqFactor     = explicitFPU ? 1.15 : 1.25;
-		profile.marginFactor = explicitFPU ? 0.08 : 0.03;
-		profile.confident    = true;
-		return profile;
-	}
-
-	profile.hasFPU	     = explicitFPU;
-	profile.fpFactor     = explicitFPU ? 1.00 : (isARM ? 1.80 : 1.40);
-	profile.intFactor    = 1.00;
-	profile.qFactor	     = explicitFPU ? 1.15 : (isARM ? 1.20 : 1.10);
-	profile.dqFactor     = explicitFPU ? 1.20 : (isARM ? 1.25 : 1.15);
-	profile.marginFactor = 0.06;
-	profile.confident    = false;
-	return profile;
+	gScheduleModel = resolveScheduleModel(module);
+	return gScheduleModel.profile;
 }
 
 static bool
@@ -459,10 +676,14 @@ irPassLLVMIRQuantDecideFunction(void * N, Module & module, Function & llvmIrFunc
 	bool   hasEnoughSpeedup = speedupEstimate >= 1.20;
 	bool   baseDecision	= hasEnoughFpWork && hasEnoughSpeedup &&
 			    effectiveCfp > (effectiveQuant + result.decisionMargin);
-	bool lowFpHighSpeedupOutlier = fpOps >= 15 && fpOps <= 30 && speedupEstimate > 2.5;
-	bool mediumFpBorderline	     = fpOps >= 35 && fpOps <= 50 && speedupEstimate < 2.0 &&
+	bool lowFpHighSpeedupOutlier = fpOps >= 15 && fpOps <= 30 && speedupEstimate > 2.5 &&
+				       result.controlFlowCost < 30.0;
+	bool mediumFpBorderline = fpOps >= 35 && fpOps <= 50 && speedupEstimate < 2.0 &&
 				  result.controlFlowCost > 50.0;
-	result.shouldQuantize = baseDecision && !lowFpHighSpeedupOutlier && !mediumFpBorderline;
+	bool highControlFlowPenalty = fpOps >= 40 && result.controlFlowCost > 60.0 &&
+				      result.cintCost < 100.0;
+	result.shouldQuantize = baseDecision && !lowFpHighSpeedupOutlier &&
+				!mediumFpBorderline && !highControlFlowPenalty;
 
 	errs() << "[quant-decider] function=" << llvmIrFunction.getName()
 	       << " targetHasFPU=" << (result.targetHasFPU ? "true" : "false")
