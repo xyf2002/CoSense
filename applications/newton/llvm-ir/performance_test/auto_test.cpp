@@ -540,7 +540,7 @@ main(int argc, char ** argv)
 	std::vector<std::string> test_cases;
 	if (g_enable_quant)
 	{
-		test_cases = {"e_y0", "e_j0", "e_exp", "e_log", "sin_cosf"};
+		test_cases = {"perf_y0", "perf_j0", "perf_exp", "perf_log", "perf_sincosf"};
 	}
 	else
 	{

@@ -382,6 +382,6 @@ all: default
 default: perf_exp perf_exp_opt perf_log perf_log_opt perf_acosh perf_acosh_opt perf_j0 perf_j0_opt perf_y0 perf_y0_opt perf_rem_pio2 perf_rem_pio2_opt perf_sincosf perf_sincosf_opt perf_float64_add perf_float64_add_opt perf_float64_div perf_float64_div_opt perf_float64_mul perf_float64_mul_opt perf_float64_sin perf_float64_sin_opt perf_arm_sqrt_q15 perf_arm_sqrt_q15_opt auto_test_compile
 
 clean:
-	$(QUIET)rm -f *.ll *.o *.s *.txt out.* libout.a main_out auto_test
+	$(QUIET)rm -f *.ll *.o *.s *.txt out.* libout.a main_out
 	cd $(CHStone_DIR) && $(MAKE_CLEAN)
 	cd $(SUBDIR) && $(MAKE_CLEAN)
