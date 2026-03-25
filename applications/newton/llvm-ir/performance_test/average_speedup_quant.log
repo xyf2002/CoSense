@@ -1,0 +1,6 @@
+test cast	instruction count	time consumption	ir lines	library size	compile time
+e_y0	0%	0%	-2147483648%	3%	2741%
+e_j0	0%	-2147483648%	-2147483648%	4%	8%
+e_exp	0%	0%	47%	17%	15%
+e_log	0%	14%	25%	18%	-2147483648%
+sin_cosf	0%	0%	10%	13%	16%

@@ -1,0 +1,11 @@
+test cast	instruction count	time consumption	ir lines	library size	compile time
+perf_exp	0%	-2147483648%	44%	14%	-2147483648%
+perf_log	0%	7%	29%	15%	-2147483648%
+perf_acosh	0%	10%	58%	13%	-2147483648%
+perf_j0	0%	-2147483648%	10%	7%	74%
+perf_y0	0%	1%	7%	5%	3451%
+perf_rem_pio2	0%	25%	123%	69%	-2147483648%
+perf_sincosf	0%	49%	25%	15%	2992%
+perf_float64_add	0%	15%	12%	6%	206%
+perf_float64_div	0%	8%	47%	25%	219%
+perf_float64_mul	0%	-2147483648%	35%	17%	1069%
