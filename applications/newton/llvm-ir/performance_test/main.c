@@ -159,6 +159,23 @@ randomFloatArr(bmx055fAcceleration *randFloatValue, bmx055fAcceleration min, bmx
     }
 }
 
+/*
+ * FNV-1a 64-bit hash over raw bytes. Used to fingerprint the whole result
+ * array so a regression check can compare every computed value instead of
+ * only the first five that are printed.
+ */
+static uint64_t
+fnv1a64(const void* data, size_t len)
+{
+    const unsigned char* bytes = (const unsigned char*)data;
+    uint64_t hash = 1469598103934665603ULL;
+    for (size_t idx = 0; idx < len; idx++) {
+        hash ^= (uint64_t)bytes[idx];
+        hash *= 1099511628211ULL;
+    }
+    return hash;
+}
+
 /************************************
  * Main process of the test framework
  ************************************/
@@ -319,7 +336,28 @@ main(int argc, char** argv)
 #endif
     }
 
+    /*
+     * Normalise the active output array into result[] so the fingerprint below
+     * covers every benchmark uniformly. int32, int8 and float all convert to
+     * double exactly, so this loses nothing.
+     */
+#if defined(BENCHMARK_SUITE_INT) || defined(ARM_SQRT_Q15)
+    for (size_t idx = 0; idx < iteration_num; idx++) {
+        result[idx] = (double)intResult[idx];
+    }
+#elif defined(BENCHMARK_SUITE_INT_8)
+    for (size_t idx = 0; idx < iteration_num; idx++) {
+        result[idx] = (double)int8Result[idx];
+    }
+#elif defined(BENCHMARK_SUITE_FLOAT)
+    for (size_t idx = 0; idx < iteration_num; idx++) {
+        result[idx] = (double)fpResult[idx];
+    }
+#endif
+
     printf("results: %f\t%f\t%f\t%f\t%f\n", result[0], result[1], result[2], result[3], result[4]);
+    printf("results_hex: %a\t%a\t%a\t%a\t%a\n", result[0], result[1], result[2], result[3], result[4]);
+    printf("results_hash: %016llx\n", (unsigned long long)fnv1a64(result, sizeof(result)));
     //printf("int results: %d\t%d\t%d\t%d\t%d\n", intResult[0], intResult[1], intResult[2], intResult[3], intResult[4]);
 
 	return 0;
